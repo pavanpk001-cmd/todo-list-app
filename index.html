@@ -52,6 +52,58 @@
           const [priorityFilter, setPriorityFilter] = useState("all");
           const [editId, setEditId] = useState(null);
           const [editText, setEditText] = useState("");
+          const [notificationPermission, setNotificationPermission] = useState("default");
+
+          // Request notification permission on first load
+          useEffect(() => {
+            if ("Notification" in window) {
+              setNotificationPermission(Notification.permission);
+              if (Notification.permission === "default") {
+                Notification.requestPermission().then(permission => {
+                  setNotificationPermission(permission);
+                });
+              }
+            }
+          }, []);
+
+          // Check for overdue tasks and send notifications
+          useEffect(() => {
+            const checkOverdueTasks = () => {
+              if (notificationPermission === "granted") {
+                const overdueTasks = tasks.filter(task =>
+                  !task.completed &&
+                  task.dueDate &&
+                  isOverdue(task.dueDate)
+                );
+
+                overdueTasks.forEach(task => {
+                  // Check if we already notified about this task recently
+                  const lastNotified = localStorage.getItem(`notified_${task.id}`);
+                  const now = Date.now();
+                  const oneHour = 60 * 60 * 1000; // Don't spam notifications
+
+                  if (!lastNotified || (now - parseInt(lastNotified)) > oneHour) {
+                    new Notification("TaskR - Overdue Task!", {
+                      body: `"${task.text}" is overdue!`,
+                      icon: "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMzIiIGhlaWdodD0iMzIiIHZpZXdCb3g9IjAgMCAzMiAzMiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPGNpcmNsZSBjeD0iMTYiIGN5PSIxNiIgcj0iMTYiIGZpbGw9IiMwYTBhMGEiLz4KPHBhdGggZD0iTTggMTJIMTZNMjQgMTJIMTZNMjQgMjBIMTZNMjQgMjRIMTZNMjQgMjhIMTZNMjQgMzJIMTZNMjQgMzZIMTZNMjQgNDBIMTZNMjQgNDRIMTZNMjQgNDhIMTZNMjQgNTJIMTZNMjQgNTZIMTZNMjQgNjBIMTZNMjQgNjRIMTZNMjQgNjhIMTZNMjQgNzJIMTZNMjQgNzZIMTZNMjQgODBIMTZNMjQgODRIMTZNMjQgODhIMTZNMjQgOTJIMTZNMjQgOTZIMTZNMjQgMTAwSDE2TTI0IDEwNEgxNk0yNCAxMDhIMTZNMjQgMTEySDE2TTI0IDExNkgxNk0yNCAxMjBIMTZNMjQgMTI0SDE2TTI0IDEyOEgxNk0yNCAxMzJIMTZNMjQgMTM2SDE2TTI0IDE0MEgxNk0yNCAxNDRIMTZNMjQgMTQ4SDE2TTI0IDE1MkgxNk0yNCAxNTZIMTZNMjQgMTYwSDE2TTI0IDE2NEgxNk0yNCAxNjhIMTZNMjQgMTcySDE2TTI0IDE3NkgxNk0yNCAxODBIMTZNMjQgMTg0SDE2TTI0IDE4OEgxNk0yNCAxOTJIMTZNMjQgMTk2SDE2TTI0IDIwMEgxNk0yNCAyMDRIMTZNMjQgMjA4SDE2TTI0IDIxMkgxNk0yNCAyMTZIMTZNMjQgMjIwSDE2TTI0IDIyNEgxNk0yNCAyMjhIMTZNMjQgMjMySDE2TTI0IDIzNkgxNk0yNCAyNDBIMTZNMjQgMjQ0SDE2TTI0IDI0OEgxNk0yNCAyNTJIMTZNMjQgMjU2SDE2TTI0IDI2MEgxNk0yNCAyNjRIMTZNMjQgMjY4SDE2TTI0IDIcyIHN0cm9rZT0iI2M4ZmYwMCIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz4KPHN2ZyB4PSI4IiB5PSI4IiB3aWR0aD0iMTYiIGhlaWdodD0iMTYiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZD0iTTEyIDJDMTMuMSAyIDI0IDMuOSA4IDggNi45IDggOCA5LjEgOCA4QzggNi45IDkuMSAyIDEyIDJDMTMuMSAyIDE0IDIuOSAxNCA4QzE0IDkuMSAxMy4xIDE0IDEyIDE0QzEwLjkgMTQgMTAgMTMuMSAxMCA4QzEwIDYuOSAxMC45IDIgMTIgMlpNMTIgMTZBMTEgMTEgMCAxIDEgMjMgMTJBMTIgMTIgMCAwIDEgMTIgMTZaTTEyIDIwQTQgNCAwIDEgMCA4IDIwQTQgNCAwIDEgMCAxMiAyMFoiIGZpbGw9IiNmODcxNzEiLz4KPHN2Zz4KPHN2Zz4K",
+                      tag: `overdue_${task.id}`,
+                      requireInteraction: false,
+                      silent: false
+                    });
+
+                    localStorage.setItem(`notified_${task.id}`, now.toString());
+                  }
+                });
+              }
+            };
+
+            // Check every minute
+            const interval = setInterval(checkOverdueTasks, 60000);
+            // Also check immediately
+            checkOverdueTasks();
+
+            return () => clearInterval(interval);
+          }, [tasks, notificationPermission]);
 
           useEffect(() => {
             localStorage.setItem("tasks", JSON.stringify(tasks));
@@ -88,7 +140,21 @@
             setEditText("");
           };
 
-          const clearCompleted = () => setTasks(tasks.filter((t) => !t.completed));
+          const requestNotificationPermission = async () => {
+            if ("Notification" in window) {
+              const permission = await Notification.requestPermission();
+              setNotificationPermission(permission);
+            }
+          };
+
+          const clearAllNotifications = () => {
+            if ("Notification" in window) {
+              // Clear all notification timestamps to allow re-notification
+              tasks.forEach(task => {
+                localStorage.removeItem(`notified_${task.id}`);
+              });
+            }
+          };
 
           const filteredTasks = tasks.filter((t) => {
             const statusMatch =
@@ -160,11 +226,28 @@
                 <div style={styles.header}>
                   <div style={styles.headerTop}>
                     <span style={styles.logo}>✦ TASKR</span>
-                    <span style={styles.statsChip}>
-                      {activeCount} left · {completedCount} done
-                    </span>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      {notificationPermission === "granted" && (
+                        <span style={{ ...styles.statsChip, background: "#1a5f1a", color: "#4ade80" }}>
+                          🔔 Notifications ON
+                        </span>
+                      )}
+                      {notificationPermission === "denied" && (
+                        <span style={{ ...styles.statsChip, background: "#5f1a1a", color: "#f87171" }}>
+                          🔕 Notifications OFF
+                        </span>
+                      )}
+                      <span style={styles.statsChip}>
+                        {activeCount} left · {completedCount} done
+                      </span>
+                    </div>
                   </div>
                   <p style={styles.subheading}>Stay sharp. Get it done.</p>
+                  {notificationPermission === "default" && (
+                    <p style={{ ...styles.subheading, color: "#666", fontSize: 12 }}>
+                      💡 Enable notifications to get reminded about overdue tasks!
+                    </p>
+                  )}
                 </div>
 
                 {/* Add Task Form */}
@@ -206,6 +289,29 @@
                     </div>
                   </div>
                 </div>
+
+                {/* Notification Settings */}
+                {notificationPermission !== "granted" && (
+                  <div style={styles.notificationBanner}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                      <span style={{ fontSize: 20 }}>🔔</span>
+                      <div>
+                        <p style={{ margin: 0, fontWeight: 600, color: "#c8ff00" }}>
+                          Enable Task Reminders
+                        </p>
+                        <p style={{ margin: 0, fontSize: 12, color: "#ccc" }}>
+                          Get notified when tasks become overdue
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={requestNotificationPermission}
+                      style={styles.enableNotificationsBtn}
+                    >
+                      Enable Notifications
+                    </button>
+                  </div>
+                )}
 
                 {/* Filters */}
                 <div style={styles.filters}>
