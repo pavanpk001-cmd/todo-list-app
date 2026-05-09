@@ -1,0 +1,653 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TaskR - Todo List App</title>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        const PRIORITIES = ["low", "medium", "high"];
+        const FILTERS = ["all", "active", "completed"];
+
+        const PRIORITY_META = {
+          low: { label: "Low", color: "#4ade80", bg: "#052e16" },
+          medium: { label: "Medium", color: "#facc15", bg: "#1c1400" },
+          high: { label: "High", color: "#f87171", bg: "#2d0000" },
+        };
+
+        function formatDate(dateStr) {
+          if (!dateStr) return null;
+          const d = new Date(dateStr + "T00:00:00");
+          return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+        }
+
+        function isOverdue(dateStr) {
+          if (!dateStr) return false;
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          return new Date(dateStr + "T00:00:00") < today;
+        }
+
+        function TodoApp() {
+          const [tasks, setTasks] = useState(() => {
+            try {
+              return JSON.parse(localStorage.getItem("tasks")) || [];
+            } catch {
+              return [];
+            }
+          });
+
+          const [input, setInput] = useState("");
+          const [dueDate, setDueDate] = useState("");
+          const [priority, setPriority] = useState("medium");
+          const [filter, setFilter] = useState("all");
+          const [priorityFilter, setPriorityFilter] = useState("all");
+          const [editId, setEditId] = useState(null);
+          const [editText, setEditText] = useState("");
+
+          useEffect(() => {
+            localStorage.setItem("tasks", JSON.stringify(tasks));
+          }, [tasks]);
+
+          const addTask = () => {
+            if (!input.trim()) return;
+            const newTask = {
+              id: Date.now(),
+              text: input.trim(),
+              completed: false,
+              dueDate: dueDate || null,
+              priority,
+              createdAt: new Date().toISOString(),
+            };
+            setTasks([newTask, ...tasks]);
+            setInput("");
+            setDueDate("");
+            setPriority("medium");
+          };
+
+          const toggleTask = (id) => {
+            setTasks(tasks.map((t) => (t.id === id ? { ...t, completed: !t.completed } : t)));
+          };
+
+          const deleteTask = (id) => {
+            setTasks(tasks.filter((t) => t.id !== id));
+          };
+
+          const saveEdit = (id) => {
+            if (!editText.trim()) return;
+            setTasks(tasks.map((t) => (t.id === id ? { ...t, text: editText.trim() } : t)));
+            setEditId(null);
+            setEditText("");
+          };
+
+          const clearCompleted = () => setTasks(tasks.filter((t) => !t.completed));
+
+          const filteredTasks = tasks.filter((t) => {
+            const statusMatch =
+              filter === "all" ? true : filter === "active" ? !t.completed : t.completed;
+            const priorityMatch = priorityFilter === "all" ? true : t.priority === priorityFilter;
+            return statusMatch && priorityMatch;
+          });
+
+          const completedCount = tasks.filter((t) => t.completed).length;
+          const activeCount = tasks.filter((t) => !t.completed).length;
+
+          return (
+            <div style={styles.page}>
+              <style>{`
+                @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;700;800&family=DM+Mono:wght@300;400;500&display=swap');
+
+                * { box-sizing: border-box; margin: 0; padding: 0; }
+
+                ::placeholder { color: #444; }
+
+                input[type="date"]::-webkit-calendar-picker-indicator {
+                  filter: invert(0.6);
+                  cursor: pointer;
+                }
+
+                .task-row {
+                  transition: transform 0.15s ease, background 0.15s ease;
+                }
+                .task-row:hover {
+                  transform: translateX(3px);
+                  background: #161616 !important;
+                }
+
+                .del-btn {
+                  opacity: 0;
+                  transition: opacity 0.15s ease;
+                }
+                .task-row:hover .del-btn {
+                  opacity: 1;
+                }
+
+                .add-btn:hover {
+                  background: #e2ff5d !important;
+                  color: #000 !important;
+                }
+
+                .filter-btn:hover {
+                  background: #1e1e1e !important;
+                }
+
+                .checkbox {
+                  cursor: pointer;
+                  transition: transform 0.1s;
+                }
+                .checkbox:hover {
+                  transform: scale(1.2);
+                }
+
+                input, select {
+                  outline: none;
+                }
+                input:focus {
+                  border-color: #c8ff00 !important;
+                }
+              `}</style>
+
+              <div style={styles.container}>
+                {/* Header */}
+                <div style={styles.header}>
+                  <div style={styles.headerTop}>
+                    <span style={styles.logo}>✦ TASKR</span>
+                    <span style={styles.statsChip}>
+                      {activeCount} left · {completedCount} done
+                    </span>
+                  </div>
+                  <p style={styles.subheading}>Stay sharp. Get it done.</p>
+                </div>
+
+                {/* Add Task Form */}
+                <div style={styles.form}>
+                  <div style={styles.inputRow}>
+                    <input
+                      style={styles.mainInput}
+                      placeholder="What needs to get done?"
+                      value={input}
+                      onChange={(e) => setInput(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && addTask()}
+                    />
+                    <button style={styles.addBtn} className="add-btn" onClick={addTask}>
+                      + Add
+                    </button>
+                  </div>
+                  <div style={styles.metaRow}>
+                    <input
+                      type="date"
+                      style={styles.dateInput}
+                      value={dueDate}
+                      onChange={(e) => setDueDate(e.target.value)}
+                    />
+                    <div style={styles.priorityGroup}>
+                      {PRIORITIES.map((p) => (
+                        <button
+                          key={p}
+                          onClick={() => setPriority(p)}
+                          style={{
+                            ...styles.priorityBtn,
+                            background: priority === p ? PRIORITY_META[p].color : "#111",
+                            color: priority === p ? "#000" : "#555",
+                            borderColor: priority === p ? PRIORITY_META[p].color : "#222",
+                          }}
+                        >
+                          {PRIORITY_META[p].label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Filters */}
+                <div style={styles.filters}>
+                  <div style={styles.filterGroup}>
+                    {FILTERS.map((f) => (
+                      <button
+                        key={f}
+                        className="filter-btn"
+                        onClick={() => setFilter(f)}
+                        style={{
+                          ...styles.filterBtn,
+                          background: filter === f ? "#1e1e1e" : "transparent",
+                          color: filter === f ? "#c8ff00" : "#555",
+                          borderBottom: filter === f ? "2px solid #c8ff00" : "2px solid transparent",
+                        }}
+                      >
+                        {f.charAt(0).toUpperCase() + f.slice(1)}
+                      </button>
+                    ))}
+                  </div>
+                  <div style={styles.filterGroup}>
+                    {["all", ...PRIORITIES].map((p) => (
+                      <button
+                        key={p}
+                        className="filter-btn"
+                        onClick={() => setPriorityFilter(p)}
+                        style={{
+                          ...styles.filterBtn,
+                          fontSize: "11px",
+                          color:
+                            priorityFilter === p
+                              ? p === "all"
+                                ? "#c8ff00"
+                                : PRIORITY_META[p].color
+                              : "#444",
+                          background: priorityFilter === p ? "#1a1a1a" : "transparent",
+                          borderBottom:
+                            priorityFilter === p
+                              ? `2px solid ${p === "all" ? "#c8ff00" : PRIORITY_META[p].color}`
+                              : "2px solid transparent",
+                        }}
+                      >
+                        {p === "all" ? "All Priority" : PRIORITY_META[p].label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Task List */}
+                <div style={styles.taskList}>
+                  {filteredTasks.length === 0 && (
+                    <div style={styles.empty}>
+                      <span style={{ fontSize: 32 }}>✦</span>
+                      <p style={{ color: "#333", fontFamily: "'DM Mono', monospace", fontSize: 13 }}>
+                        No tasks here. Add one above.
+                      </p>
+                    </div>
+                  )}
+
+                  {filteredTasks.map((task) => {
+                    const meta = PRIORITY_META[task.priority];
+                    const overdue = !task.completed && isOverdue(task.dueDate);
+
+                    return (
+                      <div key={task.id} className="task-row" style={styles.taskRow}>
+                        {/* Priority stripe */}
+                        <div
+                          style={{
+                            width: 3,
+                            background: meta.color,
+                            borderRadius: 2,
+                            flexShrink: 0,
+                            alignSelf: "stretch",
+                          }}
+                        />
+
+                        {/* Checkbox */}
+                        <div
+                          className="checkbox"
+                          onClick={() => toggleTask(task.id)}
+                          style={{
+                            ...styles.checkbox,
+                            background: task.completed ? "#c8ff00" : "transparent",
+                            borderColor: task.completed ? "#c8ff00" : "#333",
+                          }}
+                        >
+                          {task.completed && (
+                            <span style={{ color: "#000", fontSize: 12, fontWeight: 700 }}>✓</span>
+                          )}
+                        </div>
+
+                        {/* Content */}
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          {editId === task.id ? (
+                            <input
+                              style={styles.editInput}
+                              value={editText}
+                              onChange={(e) => setEditText(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") saveEdit(task.id);
+                                if (e.key === "Escape") setEditId(null);
+                              }}
+                              autoFocus
+                            />
+                          ) : (
+                            <p
+                              onDoubleClick={() => {
+                                setEditId(task.id);
+                                setEditText(task.text);
+                              }}
+                              style={{
+                                ...styles.taskText,
+                                textDecoration: task.completed ? "line-through" : "none",
+                                color: task.completed ? "#444" : "#e0e0e0",
+                              }}
+                            >
+                              {task.text}
+                            </p>
+                          )}
+
+                          <div style={styles.taskMeta}>
+                            <span
+                              style={{
+                                ...styles.priorityTag,
+                                color: meta.color,
+                                background: meta.bg,
+                              }}
+                            >
+                              {meta.label}
+                            </span>
+                            {task.dueDate && (
+                              <span
+                                style={{
+                                  ...styles.dateTag,
+                                  color: overdue ? "#f87171" : "#666",
+                                }}
+                              >
+                                {overdue ? "⚠ " : ""}
+                                {formatDate(task.dueDate)}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Actions */}
+                        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                          {editId === task.id ? (
+                            <button style={styles.saveBtn} onClick={() => saveEdit(task.id)}>
+                              Save
+                            </button>
+                          ) : (
+                            <button
+                              className="del-btn"
+                              style={styles.editBtn}
+                              onClick={() => {
+                                setEditId(task.id);
+                                setEditText(task.text);
+                              }}
+                            >
+                              ✎
+                            </button>
+                          )}
+                          <button
+                            className="del-btn"
+                            style={styles.deleteBtn}
+                            onClick={() => deleteTask(task.id)}
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Footer */}
+                {completedCount > 0 && (
+                  <div style={styles.footer}>
+                    <button style={styles.clearBtn} onClick={clearCompleted}>
+                      Clear {completedCount} completed
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        }
+
+        const styles = {
+          page: {
+            minHeight: "100vh",
+            background: "#0a0a0a",
+            display: "flex",
+            alignItems: "flex-start",
+            justifyContent: "center",
+            padding: "40px 16px 80px",
+            fontFamily: "'Syne', sans-serif",
+          },
+          container: {
+            width: "100%",
+            maxWidth: 620,
+          },
+          header: {
+            marginBottom: 32,
+          },
+          headerTop: {
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            marginBottom: 6,
+          },
+          logo: {
+            fontSize: 28,
+            fontWeight: 800,
+            color: "#c8ff00",
+            letterSpacing: "0.05em",
+          },
+          statsChip: {
+            fontFamily: "'DM Mono', monospace",
+            fontSize: 12,
+            color: "#555",
+            background: "#111",
+            padding: "4px 10px",
+            borderRadius: 99,
+            border: "1px solid #1e1e1e",
+          },
+          subheading: {
+            fontFamily: "'DM Mono', monospace",
+            fontSize: 13,
+            color: "#3a3a3a",
+            letterSpacing: "0.05em",
+          },
+          form: {
+            background: "#111",
+            border: "1px solid #1e1e1e",
+            borderRadius: 12,
+            padding: 16,
+            marginBottom: 16,
+            display: "flex",
+            flexDirection: "column",
+            gap: 12,
+          },
+          inputRow: {
+            display: "flex",
+            gap: 10,
+          },
+          mainInput: {
+            flex: 1,
+            background: "#0a0a0a",
+            border: "1px solid #222",
+            borderRadius: 8,
+            padding: "10px 14px",
+            color: "#e0e0e0",
+            fontSize: 15,
+            fontFamily: "'Syne', sans-serif",
+            transition: "border-color 0.2s",
+          },
+          addBtn: {
+            background: "#c8ff00",
+            color: "#000",
+            border: "none",
+            borderRadius: 8,
+            padding: "10px 18px",
+            fontFamily: "'Syne', sans-serif",
+            fontWeight: 700,
+            fontSize: 14,
+            cursor: "pointer",
+            whiteSpace: "nowrap",
+            transition: "background 0.15s, color 0.15s",
+          },
+          metaRow: {
+            display: "flex",
+            gap: 12,
+            alignItems: "center",
+            flexWrap: "wrap",
+          },
+          dateInput: {
+            background: "#0a0a0a",
+            border: "1px solid #222",
+            borderRadius: 8,
+            padding: "7px 12px",
+            color: "#888",
+            fontSize: 13,
+            fontFamily: "'DM Mono', monospace",
+            cursor: "pointer",
+            transition: "border-color 0.2s",
+          },
+          priorityGroup: {
+            display: "flex",
+            gap: 6,
+          },
+          priorityBtn: {
+            border: "1px solid",
+            borderRadius: 6,
+            padding: "6px 12px",
+            fontSize: 12,
+            fontFamily: "'DM Mono', monospace",
+            fontWeight: 500,
+            cursor: "pointer",
+            transition: "all 0.15s",
+          },
+          filters: {
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            flexWrap: "wrap",
+            gap: 8,
+            marginBottom: 16,
+            paddingBottom: 12,
+            borderBottom: "1px solid #141414",
+          },
+          filterGroup: {
+            display: "flex",
+            gap: 2,
+          },
+          filterBtn: {
+            border: "none",
+            padding: "6px 12px",
+            fontSize: 12,
+            fontFamily: "'DM Mono', monospace",
+            cursor: "pointer",
+            borderRadius: 6,
+            transition: "all 0.15s",
+          },
+          taskList: {
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+          },
+          taskRow: {
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            background: "#111",
+            border: "1px solid #1a1a1a",
+            borderRadius: 10,
+            padding: "12px 14px",
+            cursor: "default",
+          },
+          checkbox: {
+            width: 20,
+            height: 20,
+            border: "2px solid",
+            borderRadius: 5,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            flexShrink: 0,
+            transition: "all 0.15s",
+          },
+          taskText: {
+            fontSize: 15,
+            fontFamily: "'Syne', sans-serif",
+            marginBottom: 4,
+            wordBreak: "break-word",
+            cursor: "text",
+          },
+          taskMeta: {
+            display: "flex",
+            gap: 8,
+            alignItems: "center",
+          },
+          priorityTag: {
+            fontSize: 10,
+            fontFamily: "'DM Mono', monospace",
+            fontWeight: 500,
+            padding: "2px 7px",
+            borderRadius: 4,
+            textTransform: "uppercase",
+            letterSpacing: "0.08em",
+          },
+          dateTag: {
+            fontSize: 11,
+            fontFamily: "'DM Mono', monospace",
+          },
+          editInput: {
+            background: "#0a0a0a",
+            border: "1px solid #c8ff00",
+            borderRadius: 6,
+            padding: "4px 10px",
+            color: "#e0e0e0",
+            fontSize: 14,
+            fontFamily: "'Syne', sans-serif",
+            width: "100%",
+            marginBottom: 4,
+          },
+          editBtn: {
+            background: "transparent",
+            border: "none",
+            color: "#555",
+            fontSize: 14,
+            cursor: "pointer",
+            padding: "4px 6px",
+          },
+          saveBtn: {
+            background: "#c8ff00",
+            border: "none",
+            color: "#000",
+            fontSize: 11,
+            fontWeight: 700,
+            fontFamily: "'DM Mono', monospace",
+            cursor: "pointer",
+            padding: "4px 10px",
+            borderRadius: 5,
+          },
+          deleteBtn: {
+            background: "transparent",
+            border: "none",
+            color: "#f87171",
+            fontSize: 13,
+            cursor: "pointer",
+            padding: "4px 6px",
+          },
+          empty: {
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: 12,
+            padding: "48px 0",
+            color: "#2a2a2a",
+          },
+          footer: {
+            marginTop: 16,
+            display: "flex",
+            justifyContent: "flex-end",
+          },
+          clearBtn: {
+            background: "transparent",
+            border: "1px solid #222",
+            color: "#555",
+            fontSize: 12,
+            fontFamily: "'DM Mono', monospace",
+            cursor: "pointer",
+            padding: "6px 14px",
+            borderRadius: 6,
+            transition: "all 0.15s",
+          },
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<TodoApp />);
+    </script>
+</body>
+</html></content>
+<parameter name="filePath">c:\Users\user\Desktop\To do list projct\index.html
