@@ -1,0 +1,1043 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TaskR - Todo List App</title>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        const PRIORITIES = ["low", "medium", "high"];
+        const FILTERS = ["all", "active", "completed"];
+
+        const PRIORITY_META = {
+          low: { label: "Low", color: "#4ade80", bg: "#052e16" },
+          medium: { label: "Medium", color: "#facc15", bg: "#1c1400" },
+          high: { label: "High", color: "#f87171", bg: "#2d0000" },
+        };
+
+        function formatDate(dateStr) {
+          if (!dateStr) return null;
+          const d = new Date(dateStr + "T00:00:00");
+          return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+        }
+
+        function formatDateTime(dateStr, timeStr) {
+          if (!dateStr) return null;
+          const dateTimeStr = timeStr ? `${dateStr}T${timeStr}` : `${dateStr}T00:00:00`;
+          const d = new Date(dateTimeStr);
+          const datePart = d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+          const timePart = timeStr ? d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true }) : null;
+          return timePart ? `${datePart} at ${timePart}` : datePart;
+        }
+
+        function parseJwt(token) {
+          try {
+            const base64Url = token.split('.')[1];
+            const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+            const jsonPayload = decodeURIComponent(atob(base64).split('').map(c => `%${('00' + c.charCodeAt(0).toString(16)).slice(-2)}`).join(''));
+            return JSON.parse(jsonPayload);
+          } catch {
+            return null;
+          }
+        }
+
+        function getStorageKey(userId) {
+          return userId ? `tasks_${userId}` : 'tasks_guest';
+        }
+
+        function isOverdue(dateStr, timeStr) {
+          if (!dateStr) return false;
+          const dateTimeStr = timeStr ? `${dateStr}T${timeStr}` : `${dateStr}T23:59:59`;
+          const dueDateTime = new Date(dateTimeStr);
+          const now = new Date();
+          return dueDateTime < now;
+        }
+
+        function TodoApp() {
+          const [user, setUser] = useState(() => {
+            try {
+              return JSON.parse(localStorage.getItem("taskr_user_info")) || null;
+            } catch {
+              return null;
+            }
+          });
+          const [userId, setUserId] = useState(() => localStorage.getItem("taskr_user_id"));
+          const [tasks, setTasks] = useState([]);
+
+          const [input, setInput] = useState("");
+          const [dueDate, setDueDate] = useState("");
+          const [dueTime, setDueTime] = useState("");
+          const [priority, setPriority] = useState("medium");
+          const [filter, setFilter] = useState("all");
+          const [priorityFilter, setPriorityFilter] = useState("all");
+          const [editId, setEditId] = useState(null);
+          const [editText, setEditText] = useState("");
+          const [notificationPermission, setNotificationPermission] = useState("default");
+          const [phoneNumber, setPhoneNumber] = useState(() => localStorage.getItem("taskr_phone") || "");
+          const [notificationMethod, setNotificationMethod] = useState(() => localStorage.getItem("taskr_notification_method") || "browser");
+          const [showPhoneInput, setShowPhoneInput] = useState(false);
+
+          // Request notification permission on first load
+          useEffect(() => {
+            if ("Notification" in window) {
+              setNotificationPermission(Notification.permission);
+              if (Notification.permission === "default") {
+                Notification.requestPermission().then(permission => {
+                  setNotificationPermission(permission);
+                });
+              }
+            }
+          }, []);
+
+          // Load tasks for the signed-in user or guest storage
+          useEffect(() => {
+            const key = getStorageKey(userId);
+            let savedTasks = [];
+
+            try {
+              const stored = localStorage.getItem(key);
+              if (stored) {
+                savedTasks = JSON.parse(stored);
+              } else if (!userId) {
+                const legacy = localStorage.getItem("tasks");
+                if (legacy) {
+                  savedTasks = JSON.parse(legacy);
+                  localStorage.setItem(key, legacy);
+                }
+              }
+            } catch {
+              savedTasks = [];
+            }
+
+            setTasks(savedTasks);
+          }, [userId]);
+
+          // Initialize Google sign-in and store tasks per account
+          useEffect(() => {
+            const handleGoogleResponse = (response) => {
+              const payload = parseJwt(response.credential);
+              if (!payload) return;
+
+              const profile = {
+                name: payload.name,
+                email: payload.email,
+                picture: payload.picture,
+              };
+
+              setUser(profile);
+              setUserId(payload.sub);
+              localStorage.setItem("taskr_user_id", payload.sub);
+              localStorage.setItem("taskr_user_info", JSON.stringify(profile));
+            };
+
+            const initializeGoogle = () => {
+              if (!window.google || !window.google.accounts || !window.google.accounts.id) return;
+
+              window.google.accounts.id.initialize({
+                client_id: "590104985713-me84mt6j5jl4m2dmn70rb13g2bg8l4p2.apps.googleusercontent.com",
+                callback: handleGoogleResponse,
+                ux_mode: "popup",
+              });
+              window.google.accounts.id.renderButton(
+                document.getElementById("googleSignInButton"),
+                { theme: "outline", size: "large", text: "signin_with", shape: "rectangular" }
+              );
+            };
+
+            if (window.google && window.google.accounts && window.google.accounts.id) {
+              initializeGoogle();
+            } else {
+              const interval = setInterval(() => {
+                if (window.google && window.google.accounts && window.google.accounts.id) {
+                  clearInterval(interval);
+                  initializeGoogle();
+                }
+              }, 250);
+
+              return () => clearInterval(interval);
+            }
+          }, []);
+
+          // Check for overdue tasks and send notifications
+          useEffect(() => {
+            const checkOverdueTasks = () => {
+              if (notificationPermission === "granted") {
+                const overdueTasks = tasks.filter(task =>
+                  !task.completed &&
+                  task.dueDate &&
+                  isOverdue(task.dueDate, task.dueTime)
+                );
+
+                overdueTasks.forEach(task => {
+                  // Check if we already notified about this task recently
+                  const lastNotified = localStorage.getItem(`notified_${task.id}`);
+                  const now = Date.now();
+                  const oneHour = 60 * 60 * 1000; // Don't spam notifications
+
+                  if (!lastNotified || (now - parseInt(lastNotified)) > oneHour) {
+                    new Notification("TaskR - Overdue Task!", {
+                      body: `"${task.text}" is overdue!`,
+                      icon: "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMzIiIGhlaWdodD0iMzIiIHZpZXdCb3g9IjAgMCAzMiAzMiIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPGNpcmNsZSBjeD0iMTYiIGN5PSIxNiIgcj0iMTYiIGZpbGw9IiMwYTBhMGEiLz4KPHBhdGggZD0iTTggMTJIMTZNMjQgMTJIMTZNMjQgMjBIMTZNMjQgMjRIMTZNMjQgMjhIMTZNMjQgMzJIMTZNMjQgMzZIMTZNMjQgNDBIMTZNMjQgNDRIMTZNMjQgNDhIMTZNMjQgNTJIMTZNMjQgNTZIMTZNMjQgNjBIMTZNMjQgNjRIMTZNMjQgNjhIMTZNMjQgNzJIMTZNMjQgNzZIMTZNMjQgODBIMTZNMjQgODRIMTZNMjQgODhIMTZNMjQgOTJIMTZNMjQgOTZIMTZNMjQgMTAwSDE2TTI0IDEwNEgxNk0yNCAxMDhIMTZNMjQgMTEySDE2TTI0IDExNkgxNk0yNCAxMjBIMTZNMjQgMTI0SDE2TTI0IDEyOEgxNk0yNCAxMzJIMTZNMjQgMTM2SDE2TTI0IDE0MEgxNk0yNCAxNDRIMTZNMjQgMTQ4SDE2TTI0IDE1MkgxNk0yNCAxNTZIMTZNMjQgMTYwSDE2TTI0IDE2NEgxNk0yNCAxNjhIMTZNMjQgMTcySDE2TTI0IDE3NkgxNk0yNCAxODBIMTZNMjQgMTg0SDE2TTI0IDE4OEgxNk0yNCAxOTJIMTZNMjQgMTk2SDE2TTI0IDIwMEgxNk0yNCAyMDRIMTZNMjQgMjA4SDE2TTI0IDIxMkgxNk0yNCAyMTZIMTZNMjQgMjIwSDE2TTI0IDIyNEgxNk0yNCAyMjhIMTZNMjQgMjMySDE2TTI0IDIzNkgxNk0yNCAyNDBIMTZNMjQgMjQ0SDE2TTI0IDI0OEgxNk0yNCAyNTJIMTZNMjQgMjU2SDE2TTI0IDI2MEgxNk0yNCAyNjRIMTZNMjQgMjY4SDE2TTI0IDIcyIHN0cm9rZT0iI2M4ZmYwMCIgc3Ryb2tlLXdpZHRoPSIyIiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz4KPHN2ZyB4PSI4IiB5PSI4IiB3aWR0aD0iMTYiIGhlaWdodD0iMTYiIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZD0iTTEyIDJDMTMuMSAyIDI0IDMuOSA4IDggNi45IDggOCA5LjEgOCA4QzggNi45IDkuMSAyIDEyIDJDMTMuMSAyIDE0IDIuOSAxNCA4QzE0IDkuMSAxMy4xIDE0IDEyIDE0QzEwLjkgMTQgMTAgMTMuMSAxMCA4QzEwIDYuOSAxMC45IDIgMTIgMlpNMTIgMTZBMTEgMTEgMCAxIDEgMjMgMTJBMTIgMTIgMCAwIDEgMTIgMTZaTTEyIDIwQTQgNCAwIDEgMCA4IDIwQTQgNCAwIDEgMCAxMiAyMFoiIGZpbGw9IiNmODcxNzEiLz4KPHN2Zz4KPHN2Zz4K",
+                      tag: `overdue_${task.id}`,
+                      requireInteraction: false,
+                      silent: false
+                    });
+
+                    localStorage.setItem(`notified_${task.id}`, now.toString());
+                  }
+                });
+              }
+            };
+
+            // Check every minute
+            const interval = setInterval(checkOverdueTasks, 60000);
+            // Also check immediately
+            checkOverdueTasks();
+
+            return () => clearInterval(interval);
+          }, [tasks, notificationPermission]);
+
+          useEffect(() => {
+            localStorage.setItem(getStorageKey(userId), JSON.stringify(tasks));
+          }, [tasks, userId]);
+
+          useEffect(() => {
+            localStorage.setItem("taskr_phone", phoneNumber);
+          }, [phoneNumber]);
+
+          useEffect(() => {
+            localStorage.setItem("taskr_notification_method", notificationMethod);
+          }, [notificationMethod])
+
+          const signOut = () => {
+            setUser(null);
+            setUserId(null);
+            localStorage.removeItem("taskr_user_id");
+            localStorage.removeItem("taskr_user_info");
+            const guestKey = getStorageKey(null);
+            const guestTasks = localStorage.getItem(guestKey);
+            setTasks(guestTasks ? JSON.parse(guestTasks) : []);
+          };
+
+          const addTask = () => {
+            if (!input.trim()) return;
+            const newTask = {
+              id: Date.now(),
+              text: input.trim(),
+              completed: false,
+              dueDate: dueDate || null,
+              dueTime: dueTime || null,
+              priority,
+              createdAt: new Date().toISOString(),
+            };
+            setTasks([newTask, ...tasks]);
+            setInput("");
+            setDueDate("");
+            setDueTime("");
+            setPriority("medium");
+          };
+
+          const toggleTask = (id) => {
+            setTasks(tasks.map((t) => (t.id === id ? { ...t, completed: !t.completed } : t)));
+          };
+
+          const deleteTask = (id) => {
+            setTasks(tasks.filter((t) => t.id !== id));
+          };
+
+          const clearCompleted = () => {
+            setTasks(tasks.filter((t) => !t.completed));
+          };
+
+          const saveEdit = (id) => {
+            if (!editText.trim()) return;
+            setTasks(tasks.map((t) => (t.id === id ? { ...t, text: editText.trim() } : t)));
+            setEditId(null);
+            setEditText("");
+          };
+
+          const requestNotificationPermission = async () => {
+            if ("Notification" in window) {
+              const permission = await Notification.requestPermission();
+              setNotificationPermission(permission);
+            }
+          };
+
+          const clearAllNotifications = () => {
+            if ("Notification" in window) {
+              // Clear all notification timestamps to allow re-notification
+              tasks.forEach(task => {
+                localStorage.removeItem(`notified_${task.id}`);
+              });
+            }
+          };
+
+          const filteredTasks = tasks.filter((t) => {
+            const statusMatch =
+              filter === "all" ? true : filter === "active" ? !t.completed : t.completed;
+            const priorityMatch = priorityFilter === "all" ? true : t.priority === priorityFilter;
+            return statusMatch && priorityMatch;
+          });
+
+          const completedCount = tasks.filter((t) => t.completed).length;
+          const activeCount = tasks.filter((t) => !t.completed).length;
+
+          return (
+            <div style={styles.page}>
+              <style>{`
+                @import url('https://fonts.googleapis.com/css2?family=Syne:wght@400;700;800&family=DM+Mono:wght@300;400;500&display=swap');
+
+                * { box-sizing: border-box; margin: 0; padding: 0; }
+
+                ::placeholder { color: #444; }
+
+                input[type="date"]::-webkit-calendar-picker-indicator,
+                input[type="time"]::-webkit-calendar-picker-indicator {
+                  filter: invert(0.6);
+                  cursor: pointer;
+                }
+
+                .task-row {
+                  transition: transform 0.15s ease, background 0.15s ease;
+                }
+                .task-row:hover {
+                  transform: translateX(3px);
+                  background: #161616 !important;
+                }
+
+                .del-btn {
+                  opacity: 0;
+                  transition: opacity 0.15s ease;
+                }
+                .task-row:hover .del-btn {
+                  opacity: 1;
+                }
+
+                .add-btn:hover {
+                  background: #e2ff5d !important;
+                  color: #000 !important;
+                }
+
+                .filter-btn:hover {
+                  background: #1e1e1e !important;
+                }
+
+                .checkbox {
+                  cursor: pointer;
+                  transition: transform 0.1s;
+                }
+                .checkbox:hover {
+                  transform: scale(1.2);
+                }
+
+                input, select {
+                  outline: none;
+                }
+                input:focus {
+                  border-color: #c8ff00 !important;
+                }
+              `}</style>
+
+              <div style={styles.container}>
+                {/* Header */}
+                <div style={styles.header}>
+                  <div style={styles.headerTop}>
+                    <span style={styles.logo}>✦ TASKR</span>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+                      {user ? (
+                        <>
+                          <img src={user.picture} alt={user.name} style={styles.avatar} />
+                          <span style={styles.userName}>{user.name}</span>
+                          <button style={styles.signOutBtn} onClick={signOut}>
+                            Sign out
+                          </button>
+                        </>
+                      ) : (
+                        <div id="googleSignInButton" />
+                      )}
+                      {notificationPermission === "granted" && (
+                        <span style={{ ...styles.statsChip, background: "#1a5f1a", color: "#4ade80" }}>
+                          🔔 Notifications ON
+                        </span>
+                      )}
+                      {notificationPermission === "denied" && (
+                        <span style={{ ...styles.statsChip, background: "#5f1a1a", color: "#f87171" }}>
+                          🔕 Notifications OFF
+                        </span>
+                      )}
+                      <span style={styles.statsChip}>
+                        {activeCount} left · {completedCount} done
+                      </span>
+                    </div>
+                  </div>
+                  <p style={styles.subheading}>Stay sharp. Get it done.</p>
+                  {notificationPermission === "default" && (
+                    <p style={{ ...styles.subheading, color: "#666", fontSize: 12 }}>
+                      💡 Enable notifications to get reminded about overdue tasks!
+                    </p>
+                  )}
+                </div>
+
+                {/* Add Task Form */}
+                <div style={styles.form}>
+                  <div style={styles.inputRow}>
+                    <input
+                      style={styles.mainInput}
+                      placeholder="What needs to get done?"
+                      value={input}
+                      onChange={(e) => setInput(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && addTask()}
+                    />
+                    <button style={styles.addBtn} className="add-btn" onClick={addTask}>
+                      + Add
+                    </button>
+                  </div>
+                  <div style={styles.metaRow}>
+                    <div style={styles.dateTimeGroup}>
+                      <input
+                        type="date"
+                        style={styles.dateInput}
+                        value={dueDate}
+                        onChange={(e) => setDueDate(e.target.value)}
+                      />
+                      <input
+                        type="time"
+                        style={styles.timeInput}
+                        value={dueTime}
+                        onChange={(e) => setDueTime(e.target.value)}
+                      />
+                    </div>
+                    <div style={styles.priorityGroup}>
+                      {PRIORITIES.map((p) => (
+                        <button
+                          key={p}
+                          onClick={() => setPriority(p)}
+                          style={{
+                            ...styles.priorityBtn,
+                            background: priority === p ? PRIORITY_META[p].color : "#111",
+                            color: priority === p ? "#000" : "#555",
+                            borderColor: priority === p ? PRIORITY_META[p].color : "#222",
+                          }}
+                        >
+                          {PRIORITY_META[p].label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Notification Settings */}
+                {notificationPermission !== "granted" && (
+                  <div style={styles.notificationBanner}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                      <span style={{ fontSize: 20 }}>🔔</span>
+                      <div>
+                        <p style={{ margin: 0, fontWeight: 600, color: "#c8ff00" }}>
+                          Enable Task Reminders
+                        </p>
+                        <p style={{ margin: 0, fontSize: 12, color: "#ccc" }}>
+                          Get notified when tasks become overdue
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={requestNotificationPermission}
+                      style={styles.enableNotificationsBtn}
+                    >
+                      Enable Notifications
+                    </button>
+                  </div>
+                )}
+
+                {/* SMS/WhatsApp Settings */}
+                <div style={styles.smsSection}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ fontSize: 18 }}>📱</span>
+                      <h3 style={{ margin: 0, fontSize: 14, color: "#c8ff00", fontFamily: "'DM Mono', monospace" }}>SMS & WhatsApp Reminders</h3>
+                    </div>
+                    <button
+                      onClick={() => setShowPhoneInput(!showPhoneInput)}
+                      style={{...styles.toggleBtn, background: showPhoneInput ? "#c8ff00" : "#222"}}
+                    >
+                      {showPhoneInput ? "✕" : "⚙"}
+                    </button>
+                  </div>
+
+                  {showPhoneInput && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                      <input
+                        type="tel"
+                        placeholder="+1 (555) 123-4567"
+                        value={phoneNumber}
+                        onChange={(e) => setPhoneNumber(e.target.value)}
+                        style={{...styles.phoneInput}}
+                      />
+                      <div style={{ display: "flex", gap: 8 }}>
+                        {["browser", "sms", "whatsapp"].map(method => (
+                          <button
+                            key={method}
+                            onClick={() => setNotificationMethod(method)}
+                            style={{
+                              ...styles.methodBtn,
+                              background: notificationMethod === method ? "#c8ff00" : "#111",
+                              color: notificationMethod === method ? "#000" : "#666",
+                              opacity: method === "browser" || phoneNumber ? 1 : 0.5,
+                              cursor: (method === "browser" || phoneNumber) ? "pointer" : "not-allowed"
+                            }}
+                            disabled={method !== "browser" && !phoneNumber}
+                          >
+                            {method === "browser" && "🔔 Browser"}
+                            {method === "sms" && "💬 SMS"}
+                            {method === "whatsapp" && "💬 WhatsApp"}
+                          </button>
+                        ))}
+                      </div>
+                      {phoneNumber && (
+                        <p style={{ margin: 0, fontSize: 11, color: "#666", fontFamily: "'DM Mono', monospace" }}>
+                          ✓ Phone configured for {notificationMethod === "browser" ? "browser notifications" : notificationMethod.toUpperCase()}
+                        </p>
+                      )}
+                      <p style={{ margin: 0, fontSize: 11, color: "#555", fontFamily: "'DM Mono', monospace" }}>
+                        💡 Need backend setup? See SMS_WHATSAPP_SETUP.md
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Filters */}
+                <div style={styles.filters}>
+                  <div style={styles.filterGroup}>
+                    {FILTERS.map((f) => (
+                      <button
+                        key={f}
+                        className="filter-btn"
+                        onClick={() => setFilter(f)}
+                        style={{
+                          ...styles.filterBtn,
+                          background: filter === f ? "#1e1e1e" : "transparent",
+                          color: filter === f ? "#c8ff00" : "#555",
+                          borderBottom: filter === f ? "2px solid #c8ff00" : "2px solid transparent",
+                        }}
+                      >
+                        {f.charAt(0).toUpperCase() + f.slice(1)}
+                      </button>
+                    ))}
+                  </div>
+                  <div style={styles.filterGroup}>
+                    {["all", ...PRIORITIES].map((p) => (
+                      <button
+                        key={p}
+                        className="filter-btn"
+                        onClick={() => setPriorityFilter(p)}
+                        style={{
+                          ...styles.filterBtn,
+                          fontSize: "11px",
+                          color:
+                            priorityFilter === p
+                              ? p === "all"
+                                ? "#c8ff00"
+                                : PRIORITY_META[p].color
+                              : "#444",
+                          background: priorityFilter === p ? "#1a1a1a" : "transparent",
+                          borderBottom:
+                            priorityFilter === p
+                              ? `2px solid ${p === "all" ? "#c8ff00" : PRIORITY_META[p].color}`
+                              : "2px solid transparent",
+                        }}
+                      >
+                        {p === "all" ? "All Priority" : PRIORITY_META[p].label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Task List */}
+                <div style={styles.taskList}>
+                  {filteredTasks.length === 0 && (
+                    <div style={styles.empty}>
+                      <span style={{ fontSize: 32 }}>✦</span>
+                      <p style={{ color: "#333", fontFamily: "'DM Mono', monospace", fontSize: 13 }}>
+                        No tasks here. Add one above.
+                      </p>
+                    </div>
+                  )}
+
+                  {filteredTasks.map((task) => {
+                    const meta = PRIORITY_META[task.priority];
+                    const overdue = !task.completed && isOverdue(task.dueDate, task.dueTime);
+
+                    return (
+                      <div key={task.id} className="task-row" style={styles.taskRow}>
+                        {/* Priority stripe */}
+                        <div
+                          style={{
+                            width: 3,
+                            background: meta.color,
+                            borderRadius: 2,
+                            flexShrink: 0,
+                            alignSelf: "stretch",
+                          }}
+                        />
+
+                        {/* Checkbox */}
+                        <div
+                          className="checkbox"
+                          onClick={() => toggleTask(task.id)}
+                          style={{
+                            ...styles.checkbox,
+                            background: task.completed ? "#c8ff00" : "transparent",
+                            borderColor: task.completed ? "#c8ff00" : "#333",
+                          }}
+                        >
+                          {task.completed && (
+                            <span style={{ color: "#000", fontSize: 12, fontWeight: 700 }}>✓</span>
+                          )}
+                        </div>
+
+                        {/* Content */}
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          {editId === task.id ? (
+                            <input
+                              style={styles.editInput}
+                              value={editText}
+                              onChange={(e) => setEditText(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") saveEdit(task.id);
+                                if (e.key === "Escape") setEditId(null);
+                              }}
+                              autoFocus
+                            />
+                          ) : (
+                            <p
+                              onDoubleClick={() => {
+                                setEditId(task.id);
+                                setEditText(task.text);
+                              }}
+                              style={{
+                                ...styles.taskText,
+                                textDecoration: task.completed ? "line-through" : "none",
+                                color: task.completed ? "#444" : "#e0e0e0",
+                              }}
+                            >
+                              {task.text}
+                            </p>
+                          )}
+
+                          <div style={styles.taskMeta}>
+                            <span
+                              style={{
+                                ...styles.priorityTag,
+                                color: meta.color,
+                                background: meta.bg,
+                              }}
+                            >
+                              {meta.label}
+                            </span>
+                            {task.dueDate && (
+                              <span
+                                style={{
+                                  ...styles.dateTag,
+                                  color: overdue ? "#f87171" : "#666",
+                                }}
+                              >
+                                {overdue ? "⚠ " : ""}
+                                {formatDateTime(task.dueDate, task.dueTime)}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Actions */}
+                        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                          {editId === task.id ? (
+                            <button style={styles.saveBtn} onClick={() => saveEdit(task.id)}>
+                              Save
+                            </button>
+                          ) : (
+                            <button
+                              className="del-btn"
+                              style={styles.editBtn}
+                              onClick={() => {
+                                setEditId(task.id);
+                                setEditText(task.text);
+                              }}
+                            >
+                              ✎
+                            </button>
+                          )}
+                          <button
+                            className="del-btn"
+                            style={styles.deleteBtn}
+                            onClick={() => deleteTask(task.id)}
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Footer */}
+                {completedCount > 0 && (
+                  <div style={styles.footer}>
+                    <button style={styles.clearBtn} onClick={clearCompleted}>
+                      Clear {completedCount} completed
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        }
+
+        const styles = {
+          page: {
+            minHeight: "100vh",
+            background: "#0a0a0a",
+            display: "flex",
+            alignItems: "flex-start",
+            justifyContent: "center",
+            padding: "40px 16px 80px",
+            fontFamily: "'Syne', sans-serif",
+          },
+          container: {
+            width: "100%",
+            maxWidth: 620,
+          },
+          header: {
+            marginBottom: 32,
+          },
+          headerTop: {
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            marginBottom: 6,
+          },
+          logo: {
+            fontSize: 28,
+            fontWeight: 800,
+            color: "#c8ff00",
+            letterSpacing: "0.05em",
+          },
+          statsChip: {
+            fontFamily: "'DM Mono', monospace",
+            fontSize: 12,
+            color: "#555",
+            background: "#111",
+            padding: "4px 10px",
+            borderRadius: 99,
+            border: "1px solid #1e1e1e",
+          },
+          avatar: {
+            width: 28,
+            height: 28,
+            borderRadius: "50%",
+            border: "1px solid #222",
+            objectFit: "cover",
+          },
+          userName: {
+            color: "#c8ff00",
+            fontFamily: "'DM Mono', monospace",
+            fontSize: 12,
+          },
+          signOutBtn: {
+            background: "transparent",
+            border: "1px solid #444",
+            color: "#c8ff00",
+            padding: "6px 12px",
+            borderRadius: 8,
+            fontFamily: "'DM Mono', monospace",
+            fontSize: 11,
+            cursor: "pointer",
+          },
+          subheading: {
+            fontFamily: "'DM Mono', monospace",
+            fontSize: 13,
+            color: "#3a3a3a",
+            letterSpacing: "0.05em",
+          },
+          form: {
+            background: "#111",
+            border: "1px solid #1e1e1e",
+            borderRadius: 12,
+            padding: 16,
+            marginBottom: 16,
+            display: "flex",
+            flexDirection: "column",
+            gap: 12,
+          },
+          inputRow: {
+            display: "flex",
+            gap: 10,
+          },
+          mainInput: {
+            flex: 1,
+            background: "#0a0a0a",
+            border: "1px solid #222",
+            borderRadius: 8,
+            padding: "10px 14px",
+            color: "#e0e0e0",
+            fontSize: 15,
+            fontFamily: "'Syne', sans-serif",
+            transition: "border-color 0.2s",
+          },
+          addBtn: {
+            background: "#c8ff00",
+            color: "#000",
+            border: "none",
+            borderRadius: 8,
+            padding: "10px 18px",
+            fontFamily: "'Syne', sans-serif",
+            fontWeight: 700,
+            fontSize: 14,
+            cursor: "pointer",
+            whiteSpace: "nowrap",
+            transition: "background 0.15s, color 0.15s",
+          },
+          metaRow: {
+            display: "flex",
+            gap: 12,
+            alignItems: "center",
+            flexWrap: "wrap",
+          },
+          dateTimeGroup: {
+            display: "flex",
+            gap: 8,
+            alignItems: "center",
+          },
+          dateInput: {
+            background: "#0a0a0a",
+            border: "1px solid #222",
+            borderRadius: 8,
+            padding: "7px 12px",
+            color: "#888",
+            fontSize: 13,
+            fontFamily: "'DM Mono', monospace",
+            cursor: "pointer",
+            transition: "border-color 0.2s",
+          },
+          timeInput: {
+            background: "#0a0a0a",
+            border: "1px solid #222",
+            borderRadius: 8,
+            padding: "7px 12px",
+            color: "#888",
+            fontSize: 13,
+            fontFamily: "'DM Mono', monospace",
+            cursor: "pointer",
+            transition: "border-color 0.2s",
+          },
+          priorityGroup: {
+            display: "flex",
+            gap: 6,
+          },
+          priorityBtn: {
+            border: "1px solid",
+            borderRadius: 6,
+            padding: "6px 12px",
+            fontSize: 12,
+            fontFamily: "'DM Mono', monospace",
+            fontWeight: 500,
+            cursor: "pointer",
+            transition: "all 0.15s",
+          },
+          filters: {
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            flexWrap: "wrap",
+            gap: 8,
+            marginBottom: 16,
+            paddingBottom: 12,
+            borderBottom: "1px solid #141414",
+          },
+          filterGroup: {
+            display: "flex",
+            gap: 2,
+          },
+          filterBtn: {
+            border: "none",
+            padding: "6px 12px",
+            fontSize: 12,
+            fontFamily: "'DM Mono', monospace",
+            cursor: "pointer",
+            borderRadius: 6,
+            transition: "all 0.15s",
+          },
+          taskList: {
+            display: "flex",
+            flexDirection: "column",
+            gap: 8,
+          },
+          taskRow: {
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            background: "#111",
+            border: "1px solid #1a1a1a",
+            borderRadius: 10,
+            padding: "12px 14px",
+            cursor: "default",
+          },
+          checkbox: {
+            width: 20,
+            height: 20,
+            border: "2px solid",
+            borderRadius: 5,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            flexShrink: 0,
+            transition: "all 0.15s",
+            cursor: "pointer",
+          },
+          taskText: {
+            fontSize: 15,
+            fontFamily: "'Syne', sans-serif",
+            marginBottom: 4,
+            wordBreak: "break-word",
+            cursor: "text",
+          },
+          taskMeta: {
+            display: "flex",
+            gap: 8,
+            alignItems: "center",
+          },
+          priorityTag: {
+            fontSize: 10,
+            fontFamily: "'DM Mono', monospace",
+            fontWeight: 500,
+            padding: "2px 7px",
+            borderRadius: 4,
+            textTransform: "uppercase",
+            letterSpacing: "0.08em",
+          },
+          dateTag: {
+            fontSize: 11,
+            fontFamily: "'DM Mono', monospace",
+          },
+          editInput: {
+            background: "#0a0a0a",
+            border: "1px solid #c8ff00",
+            borderRadius: 6,
+            padding: "4px 10px",
+            color: "#e0e0e0",
+            fontSize: 14,
+            fontFamily: "'Syne', sans-serif",
+            width: "100%",
+            marginBottom: 4,
+          },
+          editBtn: {
+            background: "transparent",
+            border: "none",
+            color: "#555",
+            fontSize: 14,
+            cursor: "pointer",
+            padding: "4px 6px",
+          },
+          saveBtn: {
+            background: "#c8ff00",
+            border: "none",
+            color: "#000",
+            fontSize: 11,
+            fontWeight: 700,
+            fontFamily: "'DM Mono', monospace",
+            cursor: "pointer",
+            padding: "4px 10px",
+            borderRadius: 5,
+          },
+          deleteBtn: {
+            background: "transparent",
+            border: "none",
+            color: "#f87171",
+            fontSize: 13,
+            cursor: "pointer",
+            padding: "4px 6px",
+          },
+          empty: {
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: 12,
+            padding: "48px 0",
+            color: "#2a2a2a",
+          },
+          footer: {
+            marginTop: 16,
+            display: "flex",
+            justifyContent: "flex-end",
+          },
+          clearBtn: {
+            background: "transparent",
+            border: "1px solid #222",
+            color: "#555",
+            fontSize: 12,
+            fontFamily: "'DM Mono', monospace",
+            cursor: "pointer",
+            padding: "6px 14px",
+            borderRadius: 6,
+            transition: "all 0.15s",
+          },
+          smsSection: {
+            background: "#111",
+            border: "1px solid #1e1e1e",
+            borderRadius: 10,
+            padding: 14,
+            marginBottom: 16,
+          },
+          phoneInput: {
+            width: "100%",
+            background: "#0a0a0a",
+            border: "1px solid #222",
+            borderRadius: 8,
+            padding: "10px 14px",
+            color: "#e0e0e0",
+            fontSize: 14,
+            fontFamily: "'DM Mono', monospace",
+            boxSizing: "border-box",
+          },
+          methodBtn: {
+            flex: 1,
+            border: "1px solid #222",
+            borderRadius: 8,
+            padding: "8px 12px",
+            fontSize: 12,
+            fontFamily: "'DM Mono', monospace",
+            cursor: "pointer",
+            transition: "all 0.15s",
+            fontWeight: 600,
+          },
+          toggleBtn: {
+            background: "#222",
+            border: "1px solid #333",
+            color: "#888",
+            width: 24,
+            height: 24,
+            borderRadius: 6,
+            cursor: "pointer",
+            fontSize: 12,
+            padding: 0,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            transition: "all 0.15s",
+          },
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<TodoApp />);
+    </script>
+</body>
+</html></content>
+<parameter name="filePath">c:\Users\user\Desktop\To do list projct\index.html
